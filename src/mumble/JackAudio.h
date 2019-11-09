@@ -68,6 +68,7 @@ class JackAudioSystem : public QObject {
 		jack_nframes_t(*jack_get_buffer_size)(jack_client_t *client);
 		jack_port_t *(*jack_port_by_name)(jack_client_t *client, const char *port_name);
 		jack_port_t *(*jack_port_register)(jack_client_t *client, const char *port_name, const char *port_type, unsigned long flags, unsigned long buffer_size);
+
 		jack_ringbuffer_t *(*jack_ringbuffer_create)(size_t sz);
 		void (*jack_ringbuffer_free)(jack_ringbuffer_t *rb);
 		int (*jack_ringbuffer_mlock)(jack_ringbuffer_t *rb);
@@ -91,6 +92,15 @@ class JackAudioSystem : public QObject {
 		bool unregisterPort(jack_port_t *port);
 		bool connectPort(jack_port_t *sourcePort, jack_port_t *destinationPort);
 		bool disconnectPort(jack_port_t *port);
+
+		jack_ringbuffer_t * ringbufferCreate(size_t size);
+		void ringbufferFree(jack_ringbuffer_t *buf);
+		int ringbufferMlock(jack_ringbuffer_t *buf);
+		size_t ringbufferRead(jack_ringbuffer_t *buf, char *dest, size_t cnt);
+		size_t ringbufferReadSpace(jack_ringbuffer_t *buf);
+		void ringbufferGetWriteVector(jack_ringbuffer_t *buf, jack_ringbuffer_data_t *vec);
+		size_t ringbufferWriteSpace(const jack_ringbuffer_t *buf);
+		void ringbufferWriteAdvance(const jack_ringbuffer_t *buf, size_t cnt);
 
 		bool initialize();
 		void deinitialize();
