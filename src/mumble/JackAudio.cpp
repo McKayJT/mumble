@@ -867,7 +867,7 @@ bool JackAudioOutput::process(const jack_nframes_t &frames) {
 			return false;
 		}
 
-		outputBuffers.replace(currentChannel, dynamic_cast<jack_default_audio_sample_t*>(outputBuffer));
+		outputBuffers.replace(currentChannel, reinterpret_cast<jack_default_audio_sample_t*>(outputBuffer));
 	}
 
 	const size_t needed = frames * iSampleSize;
