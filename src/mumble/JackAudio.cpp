@@ -778,7 +778,7 @@ bool JackAudioOutput::registerPorts() {
 		}
 
 		ports.append(port);
-		inputBuffers.append(nullptr);
+		outputBuffers.append(nullptr);
 	}
 
 	return true;
@@ -800,7 +800,7 @@ bool JackAudioOutput::unregisterPorts() {
 		}
 	}
 
-	inputBuffers.clear();
+	outputBuffers.clear();
 	ports.clear();
 
 	return ret;
@@ -862,7 +862,7 @@ bool JackAudioOutput::process(const jack_nframes_t &frames) {
 
 	for (decltype(iChannels) currentChannel = 0; currentChannel < iChannels; ++currentChannel) {
 
-		auto outputBuffer = reinterpret_cast<jack_default_audio_sample_t *>(jack_port_get_buffer(ports[currentChannel], frames));
+		auto outputBuffer = jas->getPortBuffer(ports[currentChannel], frames);
 		if (!outputBuffer) {
 			return false;
 		}
@@ -881,9 +881,9 @@ bool JackAudioOutput::process(const jack_nframes_t &frames) {
 	}
 
 	if (iChannels == 1) {
-		jack_ringbuffer_read(buffer, reinterpret_cast<char *>(inputBuffers[0]), avail);
+		jack_ringbuffer_read(buffer, reinterpret_cast<char *>(outputBuffers[0]), avail);
 		if (avail < needed) {
-			memset(reinterpret_cast<char *>(&(inputBuffers[avail])), 0, needed - avail);
+			memset(reinterpret_cast<char *>(&(outputBuffers[avail])), 0, needed - avail);
 		}
 		return true;
 	}
