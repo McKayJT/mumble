@@ -998,6 +998,7 @@ void JackAudioOutput::run() {
 			continue;
 		}
 
+		jas->ringbufferGetWriteVector(buffer, writeVector);
 		auto bOk = true;
 		auto wanted = qMin(writeVector->len / iSampleSize, static_cast<size_t>(iFrameSize));
 
