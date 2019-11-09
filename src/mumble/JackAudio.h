@@ -97,10 +97,10 @@ class JackAudioSystem : public QObject {
 		void ringbufferFree(jack_ringbuffer_t *buf);
 		int ringbufferMlock(jack_ringbuffer_t *buf);
 		size_t ringbufferRead(jack_ringbuffer_t *buf, char *dest, size_t cnt);
-		size_t ringbufferReadSpace(jack_ringbuffer_t *buf);
-		void ringbufferGetWriteVector(jack_ringbuffer_t *buf, jack_ringbuffer_data_t *vec);
+		size_t ringbufferReadSpace(const jack_ringbuffer_t *buf);
+		void ringbufferGetWriteVector(const jack_ringbuffer_t *buf, jack_ringbuffer_data_t *vec);
 		size_t ringbufferWriteSpace(const jack_ringbuffer_t *buf);
-		void ringbufferWriteAdvance(const jack_ringbuffer_t *buf, size_t cnt);
+		void ringbufferWriteAdvance(jack_ringbuffer_t *buf, size_t cnt);
 
 		bool initialize();
 		void deinitialize();

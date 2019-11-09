@@ -562,7 +562,7 @@ void JackAudioSystem::ringbufferFree(jack_ringbuffer_t *buf) {
 
 int JackAudioSystem::ringbufferMlock(jack_ringbuffer_t *buf) {
 	if (buf == nullptr) {
-		return -2
+		return -2;
 	}
 	return jack_ringbuffer_mlock(buf);
 }
@@ -587,7 +587,7 @@ void JackAudioSystem::ringbufferGetWriteVector(const jack_ringbuffer_t *buf, jac
 	return jack_ringbuffer_get_write_vector(buf, vec);
 }
 
-size_t JackAudioSystem::ringbufferGetWriteSpace(const jack_ringbuffer_t *buf) {
+size_t JackAudioSystem::ringbufferWriteSpace(const jack_ringbuffer_t *buf) {
 	if (buf == nullptr) {
 		return 0;
 	}
@@ -959,7 +959,7 @@ bool JackAudioOutput::process(const jack_nframes_t &frames) {
 		return true;
 	}
 
-	auto samples = qMin(jas->ringbuffer_read_space(buffer), needed ) / sizeof(jack_default_audio_sample_t);
+	auto samples = qMin(jas->ringbufferReadSpace(buffer), needed ) / sizeof(jack_default_audio_sample_t);
 	for (auto currentSample = decltype(samples){0}; currentSample < samples; ++currentSample) {
 		jas->ringbufferRead(buffer, reinterpret_cast<char *>(&outputBuffers[currentSample % iChannels][currentSample/iChannels]), sizeof(jack_default_audio_sample_t));
 	}
@@ -971,8 +971,6 @@ bool JackAudioOutput::process(const jack_nframes_t &frames) {
 
 	return true;
 }
-
-JackAudioOutput:dd(buffer, writeVector);
 
 void JackAudioOutput::run() {
 	if (!bReady) {
@@ -993,9 +991,9 @@ void JackAudioOutput::run() {
 		qmWait.lock();
 		auto iFrameBytes = iFrameSize * iSampleSize;
 		auto iWrittenFrames = 0;
-		if (jas->jringbufferWriteSpace(buffer) < iFrameBytes ) {
-			jas->writeSpace(buffer, const jack_ringbuffer])
+		if (jas->ringbufferWriteSpace(buffer) < iFrameBytes ) {
 			qmWait.unlock();
+			qsSleep.acquire(1);
 			continue;
 		}
 
@@ -1036,7 +1034,7 @@ void JackAudioOutput::run() {
 		bOk = mix(writeVector->buf, iFrameSize - wanted);
 		iWrittenFrames += bOk ? (iFrameSize - wanted) : 0;
 next:
-		jack_ringbuffer_write_advance(buffer, iWrittenFrames * iSampleSize);
+		jas->ringbufferWriteSpace(buffer, iWrittenFrames * iSampleSize);
 		qmWait.unlock();
 		qsSleep.acquire(1);
 	} while (bReady);
