@@ -392,7 +392,7 @@ JackPorts JackAudioSystem::getPhysicalPorts(const uint8_t &flags) {
 		return JackPorts();
 	}
 
-	const auto ports = jack_get_ports(client, nullptr, "audio", JackPortIsPhysical);
+	const auto ports = jack_get_ports(client, nullptr, nullptr, JackPortIsPhysical | JackPortIsTerminal);
 	if (!ports) {
 		return JackPorts();
 	}
@@ -491,8 +491,6 @@ bool JackAudioSystem::disconnectPort(jack_port_t *port) {
 }
 
 int JackAudioSystem::processCallback(jack_nframes_t frames, void *) {
-	QMutexLocker lock(&jas->qmWait);
-
 	auto const jai = dynamic_cast<JackAudioInput *>(g.ai.get());
 	auto const jao = dynamic_cast<JackAudioOutput *>(g.ao.get());
 
@@ -536,8 +534,6 @@ int JackAudioSystem::bufferSizeCallback(jack_nframes_t frames, void *) {
 
 void JackAudioSystem::shutdownCallback(void *) {
 	qWarning("JackAudioSystem: server shutdown");
-
-	QMutexLocker lock(&jas->qmWait);
 	jas->client = nullptr;
 	jas->users = 0;
 }
@@ -563,7 +559,6 @@ JackAudioInput::~JackAudioInput() {
 }
 
 bool JackAudioInput::isReady() {
-	QMutexLocker lock(&qmWait);
 	return bReady;
 }
 
@@ -686,6 +681,8 @@ void JackAudioInput::run() {
 }
 
 JackAudioOutput::JackAudioOutput() {
+    : buffer(nullptr)
+{
 	bReady = activate();
 }
 
@@ -693,24 +690,36 @@ JackAudioOutput::~JackAudioOutput() {
 	// Request interruption
 	qmWait.lock();
 	bReady = false;
-	qwcSleep.wakeAll();
+	qsSleep.release(1);
 	qmWait.unlock();
 
 	// Wait for thread to exit
 	wait();
-
 	// Cleanup
 	deactivate();
 }
 
 bool JackAudioOutput::isReady() {
-	QMutexLocker lock(&qmWait);
 	return bReady;
 }
 
-void JackAudioOutput::allocBuffer(const jack_nframes_t &frames) {
+bool JackAudioOutput::allocBuffer(const jack_nframes_t &frames) {
 	QMutexLocker lock(&qmWait);
-	buffer.reset(new jack_default_audio_sample_t[frames * iChannels]);
+
+    iFrameSize = frames;
+	if (buffer != nullptr) {
+		jack_ringbuffer_free(buffer);
+	}
+
+	buffer = jack_ringbuffer_create(iFrameSize * iSampleSize * JACK_BUFFER_PERIODS);
+
+	if (buffer == nullptr) {
+		return false;
+	}
+
+	jack_ringbuffer_mlock(buffer);
+
+	return true;
 }
 
 bool JackAudioOutput::activate() {
@@ -731,7 +740,9 @@ bool JackAudioOutput::activate() {
 
 	lock.unlock();
 
-	allocBuffer(jas->bufferSize());
+	if !(allocBuffer(jas->bufferSize())) {
+		return false;
+	}
 
 	if (!registerPorts()) {
 		return false;
@@ -743,7 +754,7 @@ bool JackAudioOutput::activate() {
 void JackAudioOutput::deactivate() {
 	unregisterPorts();
 	jas->deactivate();
-	buffer.reset();
+	jack_ringbuffer_free(buffer);
 }
 
 bool JackAudioOutput::registerPorts() {
@@ -762,6 +773,7 @@ bool JackAudioOutput::registerPorts() {
 		}
 
 		ports.append(port);
+		inputBuffers.append(nullptr);
 	}
 
 	return true;
@@ -783,6 +795,7 @@ bool JackAudioOutput::unregisterPorts() {
 		}
 	}
 
+	inputBuffers.clear();
 	ports.clear();
 
 	return ret;
@@ -827,42 +840,48 @@ bool JackAudioOutput::disconnectPorts() {
 }
 
 bool JackAudioOutput::process(const jack_nframes_t &frames) {
-	QMutexLocker lock(&qmWait);
 
-	const auto audioToReproduce = mix(buffer.get(), frames);
+	if (!bReady) {
+		return true;
+	}
 
-	QVector<jack_default_audio_sample_t *> outputBuffers;
+	// This is actually wrong, as wakeAll does have a mutex in it.
+	qsSleep.release(1);
 
 	for (decltype(iChannels) currentChannel = 0; currentChannel < iChannels; ++currentChannel) {
-		auto outputBuffer = reinterpret_cast<jack_default_audio_sample_t *>(jas->getPortBuffer(ports[currentChannel], frames));
+
+		auto outputBuffer = reinterpret_cast<jack_default_audio_sample_t *>(jack_port_get_buffer(ports[currentChannel], frames));
 		if (!outputBuffer) {
 			return false;
 		}
 
-		if (!audioToReproduce) {
-			// Clear buffer
-			memset(outputBuffer, 0, sizeof(jack_default_audio_sample_t) * frames);
-		}
-
-		outputBuffers.append(outputBuffer);
+		outputBuffers.replace(currentChannel, inputBuffer);
 	}
 
-	if (!audioToReproduce) {
+	const auto needed = frames * iSampleSize;
+
+	/* 
+	 * We don't attempt to read if we don't have enough in the buffer
+	 * this does cause at least one frame of delay in the output
+	 * but makes the logic here much simpler
+	 */
+	if (jack_ringbuffer_read_space() < needed) {
+		for (decltype(iChannels) currentChannel = 0; currentChannel < iChannels; ++currentChannel) {
+			memset(outputBuffers[currentChannel], 0, frames * sizeof jack_default_audio_sample_t);
+		}
 		return true;
 	}
 
-	const auto samples = frames * iChannels;
-
-	if (samples > frames) {
-		// De-interleave channels
-		for (auto currentSample = decltype(samples){0}; currentSample < samples; ++currentSample) {
-			outputBuffers[currentSample % iChannels][currentSample / iChannels] = buffer[currentSample];
-		}
-	} else {
-		// Single channel
-		memcpy(outputBuffers[0], buffer.get(), sizeof(jack_default_audio_sample_t) * samples);
+	if (iChannels == 1) {
+		auto read = jack_ringbuffer_read(buffer, inputBuffers[0], needed);
 	}
-
+	else
+	{
+		decltype(needed) samples = qMin(jack_ringbuffer_read_space(), needed ) / sizeof jack_default_audio_sample_t;
+		for (auto currentSample = decltype(samples){0}; currentSample < samples; ++currentSample) {
+			jack_ringbuffer_read(buffer, outputBuffers[currentSample % iChannels][currentSample / iChannels], sizeof jack_default_audio_sample_t);
+		}
+	}
 	return true;
 }
 
@@ -876,11 +895,60 @@ void JackAudioOutput::run() {
 		connectPorts();
 	}
 
-	// Pause thread until interruption is requested by the destructor
-	qmWait.lock();
-	qwcSleep.wait(&qmWait);
-	qmWait.unlock();
+    STACKVAR(unsigned char, spareSample, iSampleSize);
 
-	// Cleanup
-	disconnectPorts();
+	// Keep feeding more data into the buffer
+	do {
+		qmWait.lock();
+		auto iFrameBytes = iFrameSize * iSampleSize;
+		if (jack_ringbuffer_write_space(buffer) < iFrameBytes ) {
+			continue;
+		}
+		jack_ringbuffer_data_t writeVector[2];
+		auto bOk = true;
+
+		jack_ringbuffer_get_write_vector(buffer, writeVector);
+		unsigned int wanted = qMin(writeVector->len / iSampleSize, iFrameSize);
+
+		if (wanted > 0) {
+			bOk = mix(writeVector->buf, wanted);
+		}
+
+		if (wanted == iFrameSize) {
+			jack_ringbufer_write_advance(iFrameBytes);
+			continue;
+		}
+		
+		// corner case where one sample wraps around the buffer
+		if (!(auto gap = (writeVector->len - (wanted * iSampleSize)))) {
+			writeVector->buf += wanted * iSampleSize;
+			if (bOk) {
+				bOk = mix(spareSample, 1);
+				memcpy(writeVector->buf, spareSample, gap);
+				writeVector++;
+				memcpy(writeVector->buf, spareSample + gap, iSampleSize - gap);
+			} else {
+				memset(writeVector->buf, 0, gap);
+				writeVector++;
+				memset(writeVector->buf, 0, iSampleSize - gap);
+			}
+			writeVector->buf += iSampleSize - gap;
+			wanted++;
+		} else {
+			writeVector++;
+		}
+
+		if (wanted == iFrameSize) {
+			jack_ringbufer_write_advance(iFrameBytes);
+			continue;
+		}
+
+		if (bOk) {
+			mix(writeVector->buf, iFrameSize - wanted);
+		} else {
+			memset(writeVector->buf, 0, iSampleSize * (iFrameSize - wanted));
+		}
+		jack_ringbufer_write_advance(iFrameBytes);
+		qmWait.unlock();
+	} while (bReady && qsSleep.tryAquire(1))
 }
