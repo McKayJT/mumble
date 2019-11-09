@@ -68,6 +68,14 @@ class JackAudioSystem : public QObject {
 		jack_nframes_t(*jack_get_buffer_size)(jack_client_t *client);
 		jack_port_t *(*jack_port_by_name)(jack_client_t *client, const char *port_name);
 		jack_port_t *(*jack_port_register)(jack_client_t *client, const char *port_name, const char *port_type, unsigned long flags, unsigned long buffer_size);
+		jack_ringbuffer_t *jack_ringbuffer_create(size_t sz);
+		void jack_ringbuffer_free(jack_ringbuffer_t *rb);
+		int jack_ringbuffer_mlock(jack_ringbuffer_t *rb);
+		size_t jack_ringbuffer_read(jack_ringbuffer_t *rb, char *dest, size_t cnt);
+		size_t jack_ringbuffer_read_space(const jack_ringbuffer_t *rb);
+		void jack_ringbuffer_get_write_vector(const jack_ringbuffer_t *rb, jack_ringbuffer_data_t *vec);
+		size_t jack_ringbuffer_write_space(const jack_ringbuffer_t *rb);
+		void jack_ringbuffer_write_advance(jack_ringbuffer_t *rb, size_t cnt);
 
 	public:
 		QHash<QString, QString> qhInput;

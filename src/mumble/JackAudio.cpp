@@ -216,6 +216,14 @@ JackAudioSystem::JackAudioSystem()
 	RESOLVE(jack_set_sample_rate_callback)
 	RESOLVE(jack_set_buffer_size_callback)
 	RESOLVE(jack_on_shutdown)
+	RESOLVE(jack_ringbuffer_create)
+	RESOLVE(jack_ringbuffer_free)
+	RESOLVE(jack_ringbuffer_mlock)
+	RESOLVE(jack_ringbuffer_read)
+	RESOLVE(jack_ringbuffer_read_space)
+	RESOLVE(jack_ringbuffer_write_space)
+	RESOLVE(jack_ringbuffer_get_write_vector)
+	RESOLVE(jack_ringbuffer_write_advance)
 
 	qhInput.insert(QString(), tr("Hardware Ports"));
 	qhOutput.insert(QString::number(1), tr("Mono"));
@@ -439,6 +447,7 @@ jack_port_t *JackAudioSystem::registerPort(const char *name, const uint8_t &flag
 	return jack_port_register(client, name, JACK_DEFAULT_AUDIO_TYPE, flags, 0);
 }
 
+
 bool JackAudioSystem::unregisterPort(jack_port_t *port) {
 	QMutexLocker lock(&qmWait);
 
@@ -534,11 +543,73 @@ int JackAudioSystem::bufferSizeCallback(jack_nframes_t frames, void *) {
 	return 0;
 }
 
+/*
+ * ringbuffer functions do not have locks.
+ * They are single consumer single producer lockless
+ */
+
+jack_ringbuffer_t *JackAudioSystem::ringbufferCreate(size_t size) {
+	if (size == 0) {
+		return nullptr;
+	}
+
+	return jack_ringbuffer_create(size);
+}
+
+void JackAudioSystem::ringbufferFree(jack_ringbuffer_t *buf) {
+	jack_ringbuffer_free(buf);
+}
+
+int JackAudioSystem::ringbufferMlock(jack_ringbuffer_t *buf) {
+	if (buf == nullptr) {
+		return -2
+	}
+	return jack_ringbuffer_mlock(buf);
+}
+
+size_t JackAudioSystem::ringbufferRead(jack_ringbuffer_t *buf, char *dest, size_t cnt) {
+	if(buf == nullptr || dest == nullptr || cnt == 0) {
+		return 0;
+	}
+	return jack_ringbuffer_read(buf, dest, cnt);
+}
+
+size_t JackAudioSystem::ringbufferReadSpace(const jack_ringbuffer_t *buf) {
+	if (buf == nullptr) {
+		return 0;
+	}
+}
+
+void JackAudioSystem::ringbufferGetWriteVector(const jack_ringbuffer_t *buf, jack_ringbuffer_data_t *vec) {
+	if (buf == nullptr || vec == nullptr) {
+		return;
+	}
+	return jack_ringbuffer_get_write_vector(buf, vec);
+}
+
+size_t JackAudioSystem::ringbufferGetWriteSpace(const jack_ringbuffer_t *buf) {
+	if (buf == nullptr) {
+		return 0;
+	}
+	return jack_ringbuffer_get_write_space(buf);
+}
+
+void JackAudioSystem::ringbufferWriteAdvance(jack_ringbuffer_t *buf, size_t cnt) {
+	if (buff == nullptr)
+		return;
+	return jack_ringbuffer_write_advance(buf, cnt);
+}
+
+/*
+ * end imported jack functions or ringbuffers 
+ */
+
 void JackAudioSystem::shutdownCallback(void *) {
 	qWarning("JackAudioSystem: server shutdown");
 	jas->client = nullptr;
 	jas->users = 0;
 }
+
 
 JackAudioInput::JackAudioInput()
     : port(nullptr)
@@ -710,16 +781,16 @@ bool JackAudioOutput::allocBuffer(const jack_nframes_t &frames) {
 
     iFrameSize = frames;
 	if (buffer != nullptr) {
-		jack_ringbuffer_free(buffer);
+		jas->ringbufferFree(buffer);
 	}
 
-	buffer = jack_ringbuffer_create(iFrameSize * iSampleSize * JACK_BUFFER_PERIODS);
+	buffer = jas->ringbufferCreate(iFrameSize * iSampleSize * JACK_BUFFER_PERIODS);
 
 	if (buffer == nullptr) {
 		return false;
 	}
 
-	jack_ringbuffer_mlock(buffer);
+	jas->ringbufferMlock(buffer);
 
 	return true;
 }
@@ -759,7 +830,7 @@ bool JackAudioOutput::activate() {
 void JackAudioOutput::deactivate() {
 	unregisterPorts();
 	jas->deactivate();
-	jack_ringbuffer_free(buffer);
+	jas->ringbufferFree(buffer);
 }
 
 bool JackAudioOutput::registerPorts() {
@@ -871,7 +942,7 @@ bool JackAudioOutput::process(const jack_nframes_t &frames) {
 	}
 
 	const size_t needed = frames * iSampleSize;
-	size_t avail = jack_ringbuffer_read_space(buffer);
+	size_t avail = jas->ringbufferReadSpace(buffer);
 
 	if (avail == 0) {
 		for (decltype(iChannels) currentChannel = 0; currentChannel < iChannels; ++currentChannel) {
@@ -881,16 +952,16 @@ bool JackAudioOutput::process(const jack_nframes_t &frames) {
 	}
 
 	if (iChannels == 1) {
-		jack_ringbuffer_read(buffer, reinterpret_cast<char *>(outputBuffers[0]), avail);
+		jas->ringbufferRead(buffer, reinterpret_cast<char *>(outputBuffers[0]), avail);
 		if (avail < needed) {
 			memset(reinterpret_cast<char *>(&(outputBuffers[avail])), 0, needed - avail);
 		}
 		return true;
 	}
 
-	auto samples = qMin(jack_ringbuffer_read_space(buffer), needed ) / sizeof(jack_default_audio_sample_t);
+	auto samples = qMin(jas->ringbuffer_read_space(buffer), needed ) / sizeof(jack_default_audio_sample_t);
 	for (auto currentSample = decltype(samples){0}; currentSample < samples; ++currentSample) {
-		jack_ringbuffer_read(buffer, reinterpret_cast<char *>(&outputBuffers[currentSample % iChannels][currentSample/iChannels]), sizeof(jack_default_audio_sample_t));
+		jas->ringbufferRead(buffer, reinterpret_cast<char *>(&outputBuffers[currentSample % iChannels][currentSample/iChannels]), sizeof(jack_default_audio_sample_t));
 	}
 	if ((samples / iChannels) < frames) {
 		for (decltype(iChannels) currentChannel = 0; currentChannel < iChannels; ++currentChannel) {
@@ -900,6 +971,8 @@ bool JackAudioOutput::process(const jack_nframes_t &frames) {
 
 	return true;
 }
+
+JackAudioOutput:dd(buffer, writeVector);
 
 void JackAudioOutput::run() {
 	if (!bReady) {
@@ -920,12 +993,12 @@ void JackAudioOutput::run() {
 		qmWait.lock();
 		auto iFrameBytes = iFrameSize * iSampleSize;
 		auto iWrittenFrames = 0;
-		if (jack_ringbuffer_write_space(buffer) < iFrameBytes ) {
+		if (jas->jringbufferWriteSpace(buffer) < iFrameBytes ) {
+			jas->writeSpace(buffer, const jack_ringbuffer])
 			qmWait.unlock();
 			continue;
 		}
 
-		jack_ringbuffer_get_write_vector(buffer, writeVector);
 		auto bOk = true;
 		auto wanted = qMin(writeVector->len / iSampleSize, static_cast<size_t>(iFrameSize));
 
