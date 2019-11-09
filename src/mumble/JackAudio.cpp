@@ -1035,7 +1035,7 @@ void JackAudioOutput::run() {
 		bOk = mix(writeVector->buf, iFrameSize - wanted);
 		iWrittenFrames += bOk ? (iFrameSize - wanted) : 0;
 next:
-		jas->ringbufferWriteSpaceAdvance(buffer, iWrittenFrames * iSampleSize);
+		jas->ringbufferWriteAdvance(buffer, iWrittenFrames * iSampleSize);
 		qmWait.unlock();
 		qsSleep.acquire(1);
 	} while (bReady);
