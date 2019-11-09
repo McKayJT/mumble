@@ -8,6 +8,7 @@
 
 #include "AudioInput.h"
 #include "AudioOutput.h"
+#include "Utils.h"
 
 #include <QtCore/QLibrary>
 #include <QtCore/QVector>
