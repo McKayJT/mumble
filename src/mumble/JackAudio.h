@@ -12,12 +12,16 @@
 #include <QtCore/QLibrary>
 #include <QtCore/QVector>
 #include <QtCore/QWaitCondition>
+#include <QtCore/QSemaphore>
 
 #include <jack/types.h>
+#include <jack/ringbuffer.h>
 
 #define JACK_MAX_OUTPUT_PORTS 2
+#define JACK_BUFFER_PERIODS 3
 
 typedef QVector<jack_port_t *> JackPorts;
+typedef QVector<jack_default_audio_sample_t *> JackBuffers;
 
 class JackAudioInit;
 
@@ -94,7 +98,7 @@ class JackAudioInput : public AudioInput {
 		Q_DISABLE_COPY(JackAudioInput)
 
 	protected:
-		bool bReady;
+		volatile bool bReady;
 		QMutex qmWait;
 		QWaitCondition qwcSleep;
 		jack_port_t *port;
@@ -120,16 +124,17 @@ class JackAudioOutput : public AudioOutput {
 		Q_DISABLE_COPY(JackAudioOutput)
 
 	protected:
-		bool bReady;
+		volatile bool bReady;
 		QMutex qmWait;
-		QWaitCondition qwcSleep;
+		QSemaphore qsSleep;
 		JackPorts ports;
-		std::unique_ptr<jack_default_audio_sample_t[]> buffer;
+		JackBuffers outputBuffers;
+		jack_ringbuffer_t *buffer;
 
 	public:
 		bool isReady();
 		bool process(const jack_nframes_t &frames);
-		void allocBuffer(const jack_nframes_t &frames);
+		bool allocBuffer(const jack_nframes_t &frames);
 		bool activate();
 		void deactivate();
 		bool registerPorts();
