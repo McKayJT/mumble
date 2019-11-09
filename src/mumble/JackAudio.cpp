@@ -578,6 +578,7 @@ size_t JackAudioSystem::ringbufferReadSpace(const jack_ringbuffer_t *buf) {
 	if (buf == nullptr) {
 		return 0;
 	}
+	return jack_ringbuffer_read_space(buf);
 }
 
 void JackAudioSystem::ringbufferGetWriteVector(const jack_ringbuffer_t *buf, jack_ringbuffer_data_t *vec) {
@@ -591,11 +592,11 @@ size_t JackAudioSystem::ringbufferWriteSpace(const jack_ringbuffer_t *buf) {
 	if (buf == nullptr) {
 		return 0;
 	}
-	return jack_ringbuffer_get_write_space(buf);
+	return jack_ringbuffer_write_space(buf);
 }
 
 void JackAudioSystem::ringbufferWriteAdvance(jack_ringbuffer_t *buf, size_t cnt) {
-	if (buff == nullptr)
+	if (buf == nullptr)
 		return;
 	return jack_ringbuffer_write_advance(buf, cnt);
 }
@@ -1034,7 +1035,7 @@ void JackAudioOutput::run() {
 		bOk = mix(writeVector->buf, iFrameSize - wanted);
 		iWrittenFrames += bOk ? (iFrameSize - wanted) : 0;
 next:
-		jas->ringbufferWriteSpace(buffer, iWrittenFrames * iSampleSize);
+		jas->ringbufferWriteSpaceAdvance(buffer, iWrittenFrames * iSampleSize);
 		qmWait.unlock();
 		qsSleep.acquire(1);
 	} while (bReady);
