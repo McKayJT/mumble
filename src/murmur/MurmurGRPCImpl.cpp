@@ -19,6 +19,7 @@
 #include "Utils.h"
 
 #include <QtCore/QStack>
+#include <QCryptographicHash>
 
 #include "MurmurRPC.proto.Wrapper.cpp"
 
@@ -96,7 +97,8 @@ void GRPCStart() {
 	if (cert.isEmpty() || key.isEmpty()) {
 		credentials = ::grpc::InsecureServerCredentials();
 	} else {
-		::grpc::SslServerCredentialsOptions options;
+		std::shared_ptr<MurmurRPCAuthenticator> authenticator(new MurmurRPCAuthenticator());
+		::grpc::SslServerCredentialsOptions options(GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_BUT_DONT_VERIFY);
 		::grpc::SslServerCredentialsOptions::PemKeyCertPair pair;
 		{
 			QFile file(cert);
@@ -120,6 +122,7 @@ void GRPCStart() {
 		}
 		options.pem_key_cert_pairs.push_back(pair);
 		credentials = ::grpc::SslServerCredentials(options);
+		credentials->SetAuthMetadataProcessor(authenticator);
 	}
 
 	service = new MurmurRPCImpl(address, credentials);
@@ -129,6 +132,49 @@ void GRPCStart() {
 
 void GRPCStop() {
 	delete service;
+}
+
+// This needs to load the list of users who can access GRPC
+MurmurRPCAuthenticator::MurmurRPCAuthenticator() {
+	//load some fake testing data
+	RPCUsers.insert(QByteArray::fromHex("8c0d921c0af9f0ab3f95a1ca521db76ed964bed9dd1249d2f07ccc621341a1d0"), All);
+	return;
+}
+
+MurmurRPCAuthenticator::~MurmurRPCAuthenticator(){
+	return;
+}
+
+// We may have to look things up in the future
+bool MurmurRPCAuthenticator::IsBlocking() const {
+	return true;
+}
+
+grpc::Status MurmurRPCAuthenticator::Process(const InputMetadata &authData, ::grpc::AuthContext *ctx, OutputMetadata *used, OutputMetadata* resp) {
+
+	qWarning("Incoming connection:");
+	auto identities = ctx->GetPeerIdentity();
+	for (auto it = identities.cbegin(); it != identities.cend(); ++it) {
+		qWarning(it->data());
+	}
+
+	for (auto pem : ctx->FindPropertyValues("x509_pem_cert")) {
+		QSslCertificate cert(QByteArray(pem.data()));
+		if (cert.isNull()) {
+			continue;
+		}
+		auto fingerprint = cert.digest(QCryptographicHash::Sha256);
+		auto perm = RPCUsers.value(fingerprint, None);
+		if (!perm) {
+			continue;
+		}
+		if(perm & All) {
+			ctx->AddProperty("permissions", std::to_string(All));
+			return ::grpc::Status::OK;
+		}
+	}
+	qWarning("Connection from %s not found in list", fingerprint.data().toHex());
+	return ::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED, "Your certificate was not presented or valid");
 }
 
 MurmurRPCImpl::MurmurRPCImpl(const QString &address, std::shared_ptr<::grpc::ServerCredentials> credentials) {
